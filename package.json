@@ -1,0 +1,10 @@
+{
+  "name": "dashboard-xtech",
+  "version": "1.0.0",
+  "description": "XTechnology Group - CEO Dashboard",
+  "scripts": {
+    "dev": "npx serve . -p 3000",
+    "start": "npx serve . -p 3000",
+    "build": "node build.js"
+  }
+}
