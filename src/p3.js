@@ -63,7 +63,7 @@ function renderWelcome(){
   </div>
 
   <div class="wel-top">
-    <div class="wel-status" data-act="openSupabase" style="cursor:pointer" title="Database status · Click to configure Supabase"><span class="wel-dot ${window.xtechDbMode==='supabase'?'':'warn'}"></span><span>${window.xtechDbMode==='supabase'?'Supabase Cloud':'Local Database'}</span></div>
+    <div class="wel-status"><span class="wel-dot ${window.xtechDbMode==='supabase'?'':'warn'}"></span><span>${window.xtechDbMode==='supabase'?'Supabase Cloud':'Local Database'}</span></div>
     <div class="wel-top-right">
       <button class="icon-btn sm" id="welThemeBtn" aria-label="${themeLabel()}" data-tip="${themeLabel()}">${themeIcon()}</button>
       <button class="wel-signout" data-act="logout">${svgI("out")}<span>Sign out</span></button>
@@ -1461,57 +1461,12 @@ VIEWS.reviews=()=>{const m=S.ui.revMonth||repMonth();const r=byId("reviews",m)||
  ${past.length?panel("Past reviews",`<div class="agenda">${past.map(x=>`<button class="ag-item" data-act="pickReview" data-id="${esc(x.id)}"><span class="bar"></span><span class="tm" style="width:80px">${mLabel(x.id,1)}</span><span class="dim" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((x.achieved||x.goals||"").slice(0,120))}</span></button>`).join("")}</div>`):""}`}};
 
 /* ---- settings ---- */
-function supabaseSettingsPanel(){
-  const curUrl=store("xtg_sb_url")||"https://xrxniiymrmhfkfpbwjco.supabase.co";
-  const curKey=store("xtg_sb_key")||"";
-  const isSb=window.xtechDbMode==="supabase";
-
-  return `<div class="sb-panel">
-    <div class="sb-head">
-      <div class="sb-title-wrap">
-        <div class="sb-logo-badge">
-          <svg viewBox="0 0 24 24"><path d="M21.362 9.354H12V.396a.396.396 0 0 0-.716-.233L2.203 12.424a.396.396 0 0 0 .319.638H12v8.958a.396.396 0 0 0 .716.233l9.081-12.261a.396.396 0 0 0-.319-.638z"/></svg>
-        </div>
-        <div>
-          <h3 style="margin:0;font-size:16px">Supabase Cloud Database</h3>
-          <div class="dim" style="font-size:12.5px">Sync all dashboard data, team accounts, leads & stats in real-time.</div>
-        </div>
-      </div>
-      <span class="sb-status-pill ${isSb?'connected':'local'}">
-        <span class="sb-dot ${isSb?'pulse':''}"></span>
-        ${isSb?'Connected to Supabase':'Local Storage (Offline)'}
-      </span>
-    </div>
-
-    <form id="sbForm" onsubmit="return false;" style="display:flex;flex-direction:column;gap:14px;margin-top:14px">
-      <div class="grid g2">
-        <div class="field">
-          <label for="sbUrl">Supabase Project URL</label>
-          <input class="inp" id="sbUrl" name="sbUrl" type="url" placeholder="https://xxxxxxxxxxxx.supabase.co" value="${esc(curUrl)}">
-          <span class="dim" style="font-size:11.5px">Project Settings → API → Project URL</span>
-        </div>
-        <div class="field">
-          <label for="sbKey">Supabase Anon Key (Public)</label>
-          <input class="inp" id="sbKey" name="sbKey" type="text" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." value="${esc(curKey)}">
-          <span class="dim" style="font-size:11.5px">Project Settings → API → Project API Keys (anon)</span>
-        </div>
-      </div>
-
-      <div class="toolbar" style="margin-top:4px;flex-wrap:wrap">
-        <button type="button" class="btn pri" data-act="saveSupabase">Save & Connect</button>
-        ${isSb?`<button type="button" class="btn" data-act="migrateSupabase">Upload Local Data to Supabase</button><button type="button" class="btn danger" data-act="disconnectSupabase">Disconnect</button>`:""}
-        <button type="button" class="btn ghost" data-act="copySupabaseSql">${svgI("copy")} Copy SQL Schema</button>
-      </div>
-    </form>
-  </div>`;
-}
-
 VIEWS.settings=()=>{
   const s=S.settings;
   const demo=COLS.reduce((n,c)=>n+S.data[c].filter(x=>x.demo).length,0);
   return {
     title:"Settings",
-    body: (isSuper()?supabaseSettingsPanel():"") +
+    body:  ""+
       panel("Company",`<form id="setForm" class="grid g2" novalidate>${fieldHTML({k:"company",l:"Company name"},s.company)}${fieldHTML({k:"currency",l:"Currency",t:"select",o:["QAR","USD","EUR","SAR","AED","MAD","GBP"],blank:null},s.currency)}${fieldHTML({k:"startMonth",l:"Tracking start month",t:"month",hint:"Cash flow starts here"},s.startMonth)}${fieldHTML({k:"reportMonth",l:"Reporting month",t:"month",hint:"Leave empty to always use the current month"},s.reportMonth)}${fieldHTML({k:"openingCash",l:"Opening cash at start month",t:"number"},s.openingCash)}<div class="full"><button class="btn pri" type="submit">Save settings</button></div></form>`)+
       (isSuper()?panel("Sample data",`<p class="muted" style="margin:0 0 12px">Load a realistic set of example products, team, leads, customers and expenses to see every page working. Everything it adds is tagged as sample data and can be removed in one click without touching your own records.</p><div class="toolbar"><button class="btn" data-act="loadDemo" ${demo?"disabled":""}>Load sample data</button><button class="btn danger" data-act="clearDemo" ${demo?"":"disabled"}>Remove sample data (${demo})</button></div>`):"")
   };

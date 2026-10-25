@@ -79,83 +79,6 @@ const ACT={
   const rows=[["Scope",pid==="all"?"All products":pName(pid)],["Month",mLabel(m,1)],["Currency",cur()],["MRR",st.mrr],["ARR",st.arr],["Active customers",st.active],["New customers",st.newC],["Churned customers",st.churned],["Churned MRR",st.churnMrr],["Subscription revenue",st.mrr],["Setup fees",st.setup],["Total revenue",st.revenue]].concat(r.cats.map(x=>["Expense: "+x.c,x.v])).concat([["Total expenses",st.expenses],["Net profit",st.profit],["New leads",r.newL.length],["Deals won",r.won.length],["New MRR booked",sum(r.won,"value")],["Deals lost",r.lost.length],["Open pipeline MRR",sum(r.open,"value")]]);
   saveFile("report-"+(pid==="all"?"group":pName(pid).replace(/\W+/g,"-").toLowerCase())+"-"+m+".csv",csv(rows,[[0,"Metric"],[1,"Value"]]))},
  exportBackup:()=>{const out={};COLS.filter(c=>c!=="users").forEach(c=>out[c]=S.data[c]);saveFile("xtechnology-backup-"+todayISO()+".json",JSON.stringify(out,null,1))},
- openSupabase:()=>openSupabaseModal(),
- copySupabaseSql:()=>{
-   const sql=`-- Run this in your Supabase SQL Editor:
-create table if not exists public.docs (
-  col text not null,
-  id text not null,
-  data jsonb not null default '{}'::jsonb,
-  updated_at timestamptz default now(),
-  primary key (col, id)
-);
-
-alter publication supabase_realtime add table public.docs;
-alter table public.docs enable row level security;
-create policy "Enable all access for anon" on public.docs for all to anon using (true) with check (true);`;
-   if(navigator.clipboard&&navigator.clipboard.writeText){
-     navigator.clipboard.writeText(sql).then(()=>toast("SQL schema copied to clipboard!")).catch(()=>toast("Copy error",1));
-   }else{
-     prompt("Copy SQL schema below:",sql);
-   }
- },
- saveSupabase:async(el)=>{
-   const f=el.closest("form")||document.querySelector("#sbForm");
-   const uEl=f?f.querySelector("#sbUrl"):document.querySelector("#sbUrl");
-   const kEl=f?f.querySelector("#sbKey"):document.querySelector("#sbKey");
-   const url=(uEl?uEl.value:"").trim();
-   const key=(kEl?kEl.value:"").trim();
-   if(!url||!key){toast("Enter both Supabase URL and Anon Key",1);return}
-   if(!/^https?:\/\//.test(url)){toast("Supabase URL must start with https://",1);return}
-   const orig=el.textContent;el.disabled=true;el.textContent="Connecting…";
-   try{
-     const sb=createSupabaseDb(url,key);
-     const {data,error}=await sb.client.from("docs").select("id").limit(1);
-     if(error){
-       if(error.code==="42P01"||(error.message&&error.message.includes("does not exist"))){
-         throw new Error("Table 'docs' does not exist in Supabase yet. Run the SQL schema in Supabase first!");
-       }
-       throw error;
-     }
-     store("xtg_sb_url",url);
-     store("xtg_sb_key",key);
-     window.xtechDbMode="supabase";
-     S.db=sb;
-     toast("Connected to Supabase!");
-     closeOverlay();
-     subscribe();
-     render();
-   }catch(err){
-     el.disabled=false;el.textContent=orig;
-     toast(err.message||"Failed to connect to Supabase",1);
-   }
- },
- migrateSupabase:async(el)=>{
-   if(window.xtechDbMode!=="supabase"){toast("Connect to Supabase first",1);return}
-   const orig=el.textContent;el.disabled=true;el.textContent="Migrating…";
-   try{
-     const count=await migrateAllToSupabase((done,total)=>{
-       el.textContent=`Uploading (${done}/${total})…`;
-     });
-     toast(`Migrated ${count} records to Supabase!`);
-     el.disabled=false;el.textContent=orig;
-     subscribe();
-     render();
-   }catch(err){
-     el.disabled=false;el.textContent=orig;
-     toast("Migration error: "+(err.message||err),1);
-   }
- },
- disconnectSupabase:()=>{
-   store("xtg_sb_url",null);
-   store("xtg_sb_key",null);
-   window.xtechDbMode="local";
-   S.db=createLocalDb();
-   toast("Switched to local database");
-   closeOverlay();
-   subscribe();
-   render();
- },
 };
 /* global search */
 function searchItems(q){q=q.toLowerCase().trim();if(!q)return [];const out=[];const has=(arr)=>arr.join(" ").toLowerCase().includes(q);
@@ -204,84 +127,8 @@ document.addEventListener("dragleave",e=>{const col=e.target.closest&&e.target.c
 document.addEventListener("drop",e=>{const col=e.target.closest&&e.target.closest("[data-drop]");if(!col)return;e.preventDefault();col.classList.remove("over");const id=e.dataTransfer.getData("text/plain");if(id)setStage(id,col.dataset.drop).catch(()=>{})});
 
 /* ================= openSupabaseModal ================= */
-const DEFAULT_SB_URL="https://xrxniiymrmhfkfpbwjco.supabase.co";
-function openSupabaseModal(){
-  const curUrl=store("xtg_sb_url")||DEFAULT_SB_URL;
-  const curKey=store("xtg_sb_key")||"";
-  const isSb=window.xtechDbMode==="supabase";
-  
-  const sqlCode=`-- Run this in your Supabase SQL Editor:
-create table if not exists public.docs (
-  col text not null,
-  id text not null,
-  data jsonb not null default '{}'::jsonb,
-  updated_at timestamptz default now(),
-  primary key (col, id)
-);
-
-alter publication supabase_realtime add table public.docs;
-alter table public.docs enable row level security;
-create policy "Enable all access for anon" on public.docs for all to anon using (true) with check (true);`;
-
-  const html=`<div class="modal" style="max-width:620px">
-    <div class="modal-h">
-      <div style="display:flex;align-items:center;gap:12px">
-        <div class="sb-logo-badge">
-          <svg viewBox="0 0 24 24"><path d="M21.362 9.354H12V.396a.396.396 0 0 0-.716-.233L2.203 12.424a.396.396 0 0 0 .319.638H12v8.958a.396.396 0 0 0 .716.233l9.081-12.261a.396.396 0 0 0-.319-.638z"/></svg>
-        </div>
-        <div>
-          <h3 style="margin:0">Supabase Cloud Connection</h3>
-          <div class="dim" style="font-size:12px">Real-time sync for leads, customers, users, finances & metrics</div>
-        </div>
-      </div>
-      <button type="button" class="btn ghost sm" data-close>${svgI("x")}</button>
-    </div>
-    <div class="modal-b" style="display:flex;flex-direction:column;gap:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--input);border-radius:10px;border:1px solid var(--line)">
-        <div>
-          <div style="font-weight:600;font-size:13px">Database Status</div>
-          <div class="dim" style="font-size:12px">${isSb?"Connected to your cloud Supabase database":"Currently running on local browser database"}</div>
-        </div>
-        <span class="sb-status-pill ${isSb?'connected':'local'}">
-          <span class="sb-dot ${isSb?'pulse':''}"></span>
-          ${isSb?'Connected':'Local Mode'}
-        </span>
-      </div>
-
-      <form id="sbForm" onsubmit="return false;" style="display:flex;flex-direction:column;gap:14px">
-        <div class="field">
-          <label for="sbUrl">Supabase Project URL *</label>
-          <input class="inp" id="sbUrl" name="sbUrl" type="url" placeholder="https://xxxxxxxxxxxx.supabase.co" value="${esc(curUrl)}" required>
-          <span class="dim" style="font-size:11.5px">Find this in Supabase Project Settings → API → Project URL</span>
-        </div>
-        <div class="field">
-          <label for="sbKey">Supabase Anon Key (Public Key) *</label>
-          <input class="inp" id="sbKey" name="sbKey" type="text" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." value="${esc(curKey)}" required>
-          <span class="dim" style="font-size:11.5px">Find this in Supabase Project Settings → API → Project API Keys (anon / public)</span>
-        </div>
-      </form>
-
-      <div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <label style="font-size:12px;font-weight:600;color:var(--muted)">1. Required SQL Schema (Run once in Supabase SQL Editor):</label>
-          <button type="button" class="btn sm ghost" data-act="copySupabaseSql">${svgI("copy")} Copy SQL</button>
-        </div>
-        <div class="sb-code-box">
-          <pre>${esc(sqlCode)}</pre>
-        </div>
-      </div>
-    </div>
-    <div class="modal-f">
-      ${isSb?`<button type="button" class="btn danger sm" data-act="disconnectSupabase">Disconnect</button><button type="button" class="btn pri sm" data-act="migrateSupabase">Upload Local Data to Cloud</button>`:""}
-      <span class="grow"></span>
-      <button type="button" class="btn" data-close>Close</button>
-      <button type="button" class="btn pri" data-act="saveSupabase">Save & Connect</button>
-    </div>
-  </div>`;
-
-  const o=openOverlay(html,true);
-  o.querySelectorAll("[data-close]").forEach(b=>b.onclick=closeOverlay);
-}
+const SB_URL="https://xrxniiymrmhfkfpbwjco.supabase.co";
+const SB_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhyeG5paXltcm1oZmtmcGJ3amNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIyNTIxMTksImV4cCI6MjEwNzgyODExOX0.lmKGeWjKzIiyPhEjEnzZrtMQW18Yg0vjOW1JTQqvuh0";
 
 /* ================= Supabase Database Adapter ================= */
 function createSupabaseDb(url,key){
@@ -561,9 +408,8 @@ function createLocalDb(){
 S.settings={currency:"QAR",company:"XTechnology Group"};S.ui.railMin=store("xtg_railmin")==="1";
 
 async function bootDb(){
-  const url=store("xtg_sb_url")||(window.SUPABASE_CONFIG&&window.SUPABASE_CONFIG.url)||DEFAULT_SB_URL;
-  const key=store("xtg_sb_key")||(window.SUPABASE_CONFIG&&window.SUPABASE_CONFIG.anonKey);
-  if(url&&key&&window.supabase){
+  const url=SB_URL,key=SB_ANON_KEY;
+  if(window.supabase){
     try{
       const sb=createSupabaseDb(url,key);
       const {error}=await sb.client.from("docs").select("id").limit(1);
@@ -573,6 +419,7 @@ async function bootDb(){
         return;
       }else{
         console.warn("Supabase query check failed:",error);
+        setTimeout(()=>{try{toast("Cloud database unavailable ("+(error.message||error.code)+") - working offline, data will NOT sync",1)}catch(e){}},1500);
       }
     }catch(err){
       console.warn("Supabase boot error:",err);
