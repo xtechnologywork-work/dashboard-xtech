@@ -404,7 +404,8 @@ COLS.forEach(c=>S.data[c]=[]);
 const isSuper=()=>S.user&&S.user.role==="superadmin";
 const canSee=(p)=>{
   if(!S.user)return false;
-  if(p==="mydash"||p==="mytx"||p==="leaderboard")return true;
+  if(p==="mydash"||p==="mytx")return !isSuper()&&!!S.user.teamId;
+   if(p==="leaderboard")return true;
   if(isSuper())return true;
   if(p==="overview"||p==="users"||p==="commissions")return false;
   const pObj=PAGES.find(x=>x.id===p);
