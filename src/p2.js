@@ -1,7 +1,7 @@
 "use strict";
 const LOGO="__LOGO__", MARK="__MARK__";
 /* ================= constants ================= */
-const COLS=["users","products","leads","customers","expenses","events","team","marketing","cash","targets","reviews","settings","commissions","payouts"];
+const COLS=["users","products","leads","customers","expenses","events","team","marketing","cash","targets","reviews","settings","commissions","payouts","audit","invoices","tasks","okrs","vault"];
 const STAGES=["New Lead","Contacted","Qualified","Demo / Meeting","Proposal Sent","Negotiation","Won","Lost"];
 const OPEN_STAGES=STAGES.slice(0,6);
 const PROB={"New Lead":5,"Contacted":10,"Qualified":20,"Demo / Meeting":40,"Proposal Sent":60,"Negotiation":80,"Won":100,"Lost":0};
@@ -405,7 +405,6 @@ const isSuper=()=>S.user&&S.user.role==="superadmin";
 const canSee=(p)=>{
   if(!S.user)return false;
   if(p==="mydash"||p==="mytx")return !isSuper()&&!!S.user.teamId;
-   if(p==="leaderboard")return true;
   if(isSuper())return true;
   if(p==="overview"||p==="users"||p==="commissions")return false;
   const pObj=PAGES.find(x=>x.id===p);
@@ -489,11 +488,12 @@ function dbErr(e){const c=e&&e.code;
  else toast("Couldn't save: "+(e&&e.message||"please try again"),1)}
 const clean=(o)=>{const r={};for(const k in o)if(k!=="id"&&o[k]!==undefined)r[k]=o[k];return r};
 async function put(col,id,data){
+ const existed=!!(id&&byId(col,id));
  const body=clean(Object.assign({},id?byId(col,id)||{}:{},data,{updatedAt:new Date().toISOString(),updatedBy:S.user?S.user.id:null}));
  if(!id){body.createdAt=body.createdAt||todayISO();body.createdBy=S.user?S.user.id:null}
- try{const ref=id?S.db.doc(col+"/"+id):S.db.collection(col).doc();await ref.set(body);if(col==="leads"){syncCommission(ref.id,body);syncCustomer(ref.id,body)}return ref.id}catch(e){dbErr(e);throw e}}
+ try{const ref=id?S.db.doc(col+"/"+id):S.db.collection(col).doc();await ref.set(body);if(col==="leads"){syncCommission(ref.id,body);syncCustomer(ref.id,body)}if(col!=="audit"&&col!=="settings")audit(existed?"update":"create",col,ref.id,body.name||body.company||body.business||body.desc||body.title||"");return ref.id}catch(e){dbErr(e);throw e}}
 async function patch(col,id,data){try{await S.db.doc(col+"/"+id).update(Object.assign({},data,{updatedAt:new Date().toISOString()}));if(col==="leads"){const L=Object.assign({},byId("leads",id)||{},data);syncCommission(id,L);syncCustomer(id,L)}}catch(e){dbErr(e);throw e}}
-async function del(col,id){try{await S.db.doc(col+"/"+id).delete();if(col==="leads")syncCommission(id,{stage:"Deleted"})}catch(e){dbErr(e);throw e}}
+async function del(col,id){try{await S.db.doc(col+"/"+id).delete();audit("delete",col,id,"");if(col==="leads")syncCommission(id,{stage:"Deleted"})}catch(e){dbErr(e);throw e}}
 
 /* ================= auth ================= */
 const SESS="xtg_session";
@@ -502,49 +502,50 @@ function refreshUser(){
  const u=byId("users",S.user.id);
  if(!u||u.active===false||u.passHash!==S.user.passHash){logout(true);return}
  S.user=u;if(typeof syncUserAndTeamPhotos==="function")syncUserAndTeamPhotos();}
-function tryResume(){if(S.user||!S.ready.users)return;let raw=sstore(SESS)||store(SESS);if(!raw)return;
- try{const {id,h}=JSON.parse(raw);const u=byId("users",id);if(u&&u.active!==false&&u.passHash===h){S.user=u;if(!isSuper()&&Array.isArray(S.user.pages))S.user.pages=S.user.pages.filter(p=>p!=="overview"&&p!=="users"&&p!=="commissions");S.page=store("xtg_page")||(isSuper()?"overview":firstPage());if(!canSee(S.page))S.page=firstPage();if(typeof syncUserAndTeamPhotos==="function")syncUserAndTeamPhotos();}}catch(e){}}
+function tryResume(){
+ if(S.authMode){if(S.user||!S.authed||!S.ready.users)return;const em=String(S.authEmail||"").toLowerCase();const u=S.data.users.find(x=>(x.email||"").toLowerCase()===em);
+  if(u&&u.active!==false){S.user=u;idleStart();if(!isSuper()&&Array.isArray(u.pages))u.pages=u.pages.filter(p=>p!=="overview"&&p!=="users"&&p!=="commissions");
+   S.page=store("xtg_page")||(isSuper()?"overview":firstPage());if(!canSee(S.page))S.page=firstPage();
+   if(S._freshLogin){S._freshLogin=false;patch("users",u.id,{lastLogin:new Date().toISOString()}).catch(()=>{});audit("login","users",u.id,"")}
+   if(typeof syncUserAndTeamPhotos==="function")syncUserAndTeamPhotos()}
+  return}
+ if(S.user||!S.ready.users)return;let raw=sstore(SESS)||store(SESS);if(!raw)return;
+ try{const {id,h}=JSON.parse(raw);const u=byId("users",id);if(u&&u.active!==false&&u.passHash===h){S.user=u;idleStart();if(!isSuper()&&Array.isArray(S.user.pages))S.user.pages=S.user.pages.filter(p=>p!=="overview"&&p!=="users"&&p!=="commissions");S.page=store("xtg_page")||(isSuper()?"overview":firstPage());if(!canSee(S.page))S.page=firstPage();if(typeof syncUserAndTeamPhotos==="function")syncUserAndTeamPhotos();}}catch(e){}}
 function firstPage(){const p=PAGES.find(p=>canSee(p.id));return p?p.id:null}
+/* login throttle: 5 wrong tries => locked 60s (per email, survives reload) */
+const LOCK_KEY="xtg_lock";
+function lockState(email){try{const o=JSON.parse(store(LOCK_KEY)||"{}");return o[email]||{n:0,until:0}}catch(e){return {n:0,until:0}}}
+function lockSave(email,s){try{const o=JSON.parse(store(LOCK_KEY)||"{}");if(s)o[email]=s;else delete o[email];store(LOCK_KEY,JSON.stringify(o))}catch(e){}}
 async function login(email,pass,remember){
  email=String(email).trim().toLowerCase();
- let u=S.data.users.find(x=>(x.email||"").toLowerCase()===email);
- if(!u){
-  const tm=S.data.team.find(t=>(t.email||"").toLowerCase()===email);
-  if(tm){
-   const newU={
-    id:"usr_"+(tm.id||Math.random().toString(36).slice(2)),
-    name:tm.name||"Team Member",
-    email:email,
-    title:tm.role||"Team Member",
-    role:(tm.dept==="Leadership"||tm.role==="CEO"||tm.role==="Super admin")?"admin":"user",
-    teamId:tm.id,
-    photo:tm.photo||null,
-    active:true,
-    scope:"all",
-    pages:PAGES.filter(p=>!p.superOnly&&!p.auto).map(p=>p.id),
-    passHash:passHash(email,pass),
-    createdAt:todayISO()
-   };
-   S.data.users.push(newU);
-   await put("users",newU.id,newU);
-   u=newU;
-  }
- }
- const expectedHash=passHash(email,pass);
- const isTeamMember=Boolean((S.data.team&&S.data.team.find(t=>(t.email||"").toLowerCase()===email))||(u&&u.teamId));
- const isAltPass=isTeamMember&&(pass===email||pass==="xtech123"||pass==="seller123"||pass==="sara123"||pass==="xtech1m$"||!u.passHash||pass===email.split("@")[0]);
- if(!u||(u.passHash!==expectedHash&&!isAltPass))return "That email and password don't match an account.";
- if(u.passHash!==expectedHash&&isAltPass){
-  u.passHash=expectedHash;
-  patch("users",u.id,{passHash:expectedHash}).catch(()=>{});
- }
+ const ls=lockState(email);
+ if(ls.until>Date.now())return "Too many attempts. Try again in "+Math.ceil((ls.until-Date.now())/1000)+" seconds.";
+ if(S.authMode){
+  const r=await S.db.client.auth.signInWithPassword({email,password:pass});
+  if(r.error){const n=(ls.n||0)+1;lockSave(email,{n:n>=5?0:n,until:n>=5?Date.now()+60000:0});return "That email and password don't match an account. If you haven't signed in since the security upgrade, ask your super admin to set up your login."}
+  lockSave(email,null);store("xtg_rem",remember?"1":null);sstore("xtg_tab","1");
+  S.authed=true;S.authEmail=email;S._freshLogin=true;S.enteredDashboard=false;startData();render();return null}
+ const u=S.data.users.find(x=>(x.email||"").toLowerCase()===email);
+ if(!u||u.passHash!==passHash(email,pass)){
+  const n=(ls.n||0)+1;lockSave(email,{n:n>=5?0:n,until:n>=5?Date.now()+60000:0});
+  if(u)audit("login_failed","users",u.id,email);
+  return "That email and password don't match an account."}
  if(u.active===false)return "This account is turned off. Ask your super admin to turn it back on.";
+ lockSave(email,null);
  S.user=u;S.enteredDashboard=false;const v=JSON.stringify({id:u.id,h:u.passHash});if(remember)store(SESS,v);else sstore(SESS,v);
  if(!isSuper()&&Array.isArray(u.pages))u.pages=u.pages.filter(p=>p!=="overview"&&p!=="users"&&p!=="commissions");S.page=isSuper()?(canSee("overview")?"overview":firstPage()):(canSee("mydash")?"mydash":firstPage());
  patch("users",u.id,{lastLogin:new Date().toISOString()}).catch(()=>{});
+ audit("login","users",u.id,"");
  if(typeof syncUserAndTeamPhotos==="function")syncUserAndTeamPhotos();
+ idleStart();
  render();return null}
-function logout(silent){S.user=null;S.enteredDashboard=false;store(SESS,null);sstore(SESS,null);closeOverlay();if(!silent)toast("Signed out");render()}
+/* auto sign-out after 30 min without activity */
+let _idleT=0;const IDLE_MS=30*60*1000;
+function idleStart(){const bump=()=>{clearTimeout(_idleT);if(!S.user)return;_idleT=setTimeout(()=>{if(S.user){logout(true);toast("Signed out after 30 minutes of inactivity",1)}},IDLE_MS)};
+ if(!idleStart._w){idleStart._w=1;["click","keydown","pointermove","touchstart"].forEach(e=>addEventListener(e,bump,{passive:true}))}bump()}
+/* audit trail: who did what, when (never blocks the app) */
+function audit(action,col,id,note){try{if(!S.db||!S.user&&action!=="login_failed")return;const ref=S.db.collection("audit").doc();ref.set({action,col,docId:id||"",note:String(note||"").slice(0,200),by:S.user?S.user.id:null,byName:S.user?(S.user.name||S.user.email):"",at:new Date().toISOString()}).catch(()=>{})}catch(e){}}
+function logout(silent){if(S.authMode&&S.authed){S.authed=false;store("xtg_rem",null);sstore("xtg_tab",null);S.db.client.auth.signOut().finally(()=>location.reload());S.user=null;return}S.user=null;S.enteredDashboard=false;store(SESS,null);sstore(SESS,null);closeOverlay();if(!silent)toast("Signed out");render()}
 
 /* ================= ui primitives ================= */
 function toast(msg,err){const t=document.createElement("div");t.className="toast"+(err?" err":"");t.textContent=msg;$("#toast").appendChild(t);setTimeout(()=>t.remove(),err?6000:2400)}

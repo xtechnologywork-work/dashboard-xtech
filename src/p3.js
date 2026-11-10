@@ -2,10 +2,12 @@
 function render(){
  const root=$("#root");
  if(!S.db){root.innerHTML=`<div class="loading"><div class="mk"><img src="${MARK}" alt="XTech"></div><div><b>The workspace database isn't available in this view.</b><br><span class="muted">Open this page on claude.ai while signed in to your account.</span></div></div>`;return}
+ if(S.authMode&&!S.authed){if(!$("#login"))renderLogin();return}
  if(!COLS.every(c=>S.ready[c])){if(!$(".loading"))root.innerHTML=`<div class="loading">Loading workspace…</div>`;return}
  if(!S.user)tryResume();
- if(!S.data.users.length){
-  const sa={id:"usr_superadmin",name:"Bader",email:"infos@xtechnology.group",passHash:passHash("infos@xtechnology.group","xtech1m$"),role:"superadmin",title:"Co-Founder",active:true,pages:PAGES.map(p=>p.id),scope:"all",createdAt:todayISO()};
+ if(S.authMode&&!S.user){S.authed=false;S.db.client.auth.signOut();toast("This login has no active dashboard account. Ask your super admin.",1);S._started=false;renderLogin();return}
+ if(!S.authMode&&!S.data.users.length){
+  const sa={id:"usr_superadmin",name:"Bader",email:"infos@xtechnology.group",passHash:passHash("infos@xtechnology.group",genPass()),role:"superadmin",title:"Co-Founder",active:true,pages:PAGES.map(p=>p.id),scope:"all",createdAt:todayISO()};
   S.data.users=[sa];
   if(S.db&&S.db.doc){S.db.doc("users/"+sa.id).set(sa).catch(()=>{})}
  }
@@ -183,7 +185,7 @@ function mobileTabBarHTML(){
   {id:"more",label:"Profile",icon:`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`,act:"openNav"}
  ];
  return `<nav id="iosTabBar" class="ios-tab-bar" aria-label="Mobile Navigation">
-  ${tabs.map(tItem=>{
+  ${tabs.filter(x=>x.act||canSee(x.id)).map(tItem=>{
     const isAct=tItem.id===S.page;
     const actAttr=tItem.act?`data-act="${tItem.act}"`:`data-act="go" data-id="${tItem.id}"`;
     const lbl=t(tItem.label);
@@ -378,16 +380,12 @@ VIEWS.overview=()=>{
    ? `<img src="${p.logo}" alt="${esc(pName)} logo" style="width:100%;height:100%;object-fit:cover;display:block">`
    : `<div style="width:100%;height:100%;display:grid;place-items:center;background:${esc(p?p.color||"#2f6bff":"#2f6bff")};color:#fff;font-weight:700;font-size:12px">${esc(initials(pName).slice(0,2))}</div>`;
   const isSel=S.ui.ovSelTx&&S.ui.ovSelTx.has(c.id);
-  const orderId="TK-"+((c.id||"").replace(/\D/g,"").slice(-5)||(98421+idx));
-  const dateStr=dLabel(c.start||todayISO())+", 10:"+pad(15+idx*12);
+  const orderId="TK-"+String(c.id||idx).replace(/[^a-z0-9]/gi,"").slice(-5).toUpperCase();
+  const dateStr=dLabel(c.start||c.createdAt||todayISO());
   const statusCls=c.status==="Active"?"completed":(c.payment==="Overdue"||c.status==="Cancelled"?"cancelled":"pending");
   const statusTxt=c.status==="Active"?"Completed":(c.payment==="Overdue"||c.status==="Cancelled"?"Cancelled":"Pending");
-  const closerId=c.owner||(c.leadId&&(byId("leads",c.leadId)||{}).owner)||"9mg7s3zsh5huvtquhtum";
-  let rawCloser=tName(closerId);
-  if(!rawCloser||rawCloser==="Unassigned") rawCloser="Sara";
-  let closerName=rawCloser;
-  if(rawCloser.toLowerCase()==="sara") closerName="Sara";
-  else if(rawCloser.includes("Bader")) closerName="Bader";
+  const closerId=c.owner||(c.leadId&&(byId("leads",c.leadId)||{}).owner)||"";
+  const closerName=closerId?tName(closerId):"Unassigned";
   const closerPhoto=teamPhoto(closerId);
   return `<tr data-act="openCustomerInsight" data-id="${esc(c.id)}" title="Click to view subscription insights">
    <td style="width:36px" onclick="event.stopPropagation()"><input type="checkbox" class="ov2-chk" data-act="ovToggleTx" data-id="${esc(c.id)}" ${isSel?"checked":""}></td>
@@ -414,7 +412,7 @@ VIEWS.overview=()=>{
      <span style="font-weight:500">${esc(closerName)}</span>
     </div>
    </td>
-   <td><span class="num strong" style="font-size:13px">${money(c.price||199)}</span></td>
+   <td><span class="num strong" style="font-size:13px">${money(c.price||0)}</span></td>
    <td><span class="ov2-badge ${statusCls}">${statusTxt}</span></td>
   </tr>`;
  }).join(""):`<tr><td colspan="8" style="text-align:center;padding:32px" class="dim">No transactions found</td></tr>`;
@@ -1229,30 +1227,35 @@ const teamSchema=()=>[{k:"name",l:"Full name",req:1},{k:"role",l:"Role / title",
 function editTeam(id){const t=id?Object.assign({},byId("team",id),{name:tName(id)}):{status:"Active"};const linked=id?S.data.users.find(u=>u.teamId===id||(t.email&&u.email&&u.email.toLowerCase()===t.email.toLowerCase())):null;
  const assignable=PAGES.filter(p=>!p.superOnly&&!p.auto);const defPages=["sales","calendar","customers"];let extra="";
  if(isSuper()){
-  if(linked)extra=`<div class="full boxed" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pill ${linked.active===false?"bad":"ok"}">${linked.active===false?"Sign-in off":"Has dashboard access"}</span><span class="muted" style="font-size:13px;flex:1;min-width:0;overflow-wrap:anywhere">Signs in as <b style="color:var(--fg);font-weight:500">${esc(linked.email)}</b> · ${linked.role==="superadmin"?"all pages":(linked.pages||[]).length+" pages"}</span><button type="button" class="btn sm" data-act="editUser" data-id="${esc(linked.id)}">Manage access</button></div>`;
+  if(linked)extra=`<div class="full boxed" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="pill ${linked.active===false?"bad":"ok"}">${linked.active===false?"Sign-in off":"Has dashboard access"}</span><span class="muted" style="font-size:13px;flex:1;min-width:0;overflow-wrap:anywhere">Signs in as <b style="color:var(--fg);font-weight:500">${esc(linked.email)}</b> · ${linked.role==="superadmin"?"all pages":(linked.pages||[]).length+" pages"}</span><button type="button" class="btn sm" data-act="editUser" data-id="${esc(linked.id)}">Manage access</button></div><div class="full field"><label for="acc_np">Set or reset sign-in password</label><input class="inp" id="acc_np" type="text" autocomplete="new-password" placeholder="Leave empty to keep. At least 8 characters"><span class="dim" style="font-size:11.5px">Type a password and press Save: they can sign in with their email and this password right away.</span></div>`;
   else extra=`<div class="full boxed"><label class="check"><input type="checkbox" id="acc_on" checked> <b style="font-weight:600">Give dashboard access</b><span class="muted" style="font-size:12.5px">— create a sign-in for this person (default: on)</span></label>
   <div id="acc_body" style="display:grid;gap:14px;margin-top:10px">
-   <div class="grid g2" style="gap:14px"><div class="field"><label for="acc_pass">Password *</label><input class="inp" id="acc_pass" type="text" autocomplete="new-password" value="xtech123" placeholder="At least 6 characters"><span class="dim" style="font-size:11.5px">They sign in with their Email and this password (default: xtech123).</span></div>
+   <div class="grid g2" style="gap:14px"><div class="field"><label for="acc_pass">Password *</label><input class="inp" id="acc_pass" type="text" autocomplete="new-password" value="${esc(genPass())}" placeholder="At least 8 characters"><span class="dim" style="font-size:11.5px">They sign in with their Email and this password. Copy it before saving; you can change it any time.</span></div>
    <div class="field"><label for="acc_scope">Data they see</label><select class="inp" id="acc_scope">${opts([{v:"all",l:"All records"},{v:"own",l:"Only their own leads, customers and events"}],"all",null)}</select></div></div>
    <div class="field"><label>Pages they can open</label><div class="perm-grid">${assignable.map(p=>`<label class="check"><input type="checkbox" class="acc_pg" value="${p.id}" ${defPages.includes(p.id)?"checked":""}> ${esc(p.label)}</label>`).join("")}</div></div></div></div>`}
  const missed=id?S.data.leads.filter(l=>l.owner===id&&l.stage==="Won"&&!byId("commissions",l.id)):[];
  if(isSuper()&&missed.length)extra+=`<div class="full boxed" id="cm_back_wrap"><label class="check"><input type="checkbox" id="cm_back"><span>Also give commission for <b>${missed.length}</b> ${missed.length===1?"deal":"deals"} this person already won</span></label></div>`;
  const tpf=photoField(id?teamPhoto(id):null,()=>(document.querySelector("#f_name")||{}).value||t.name,linked&&okPhoto(linked.photo)?"Photo (set by "+(linked.name||"them")+" in My account)":"Photo");
  const o=openForm({title:id?"Edit team member":"New team member",top:tpf.html,schema:teamSchema(),data:t,extra,onSave:async(v,o)=>{v.photo=tpf.get()||null;if(v.dept!=="Sales"&&"commissionType" in v){v.commissionType="";v.commissionValue=null}if(v.commissionType&&!(num(v.commissionValue)>0)){toast("Enter the commission value, or choose No commission",1);o.querySelector("#f_commissionValue").focus();return false}if(v.commissionType==="percent"&&num(v.commissionValue)>100){toast("A percentage can't be more than 100",1);return false}const back=o.querySelector("#cm_back")&&o.querySelector("#cm_back").checked;
-  const on=(o.querySelector("#acc_on")&&o.querySelector("#acc_on").checked)||(!linked&&v.email);let acc=null;
-  if(on&&v.email){const email=String(v.email||"").trim().toLowerCase(),passInp=o.querySelector("#acc_pass"),pass=(passInp&&passInp.value.trim())||"xtech123";
+  const on=(o.querySelector("#acc_on")&&o.querySelector("#acc_on").checked)||(!linked&&v.email);let acc=null,accPw=null;
+  const np=((o.querySelector("#acc_np")||{}).value||"").trim();if(np&&np.length<8){toast("Use at least 8 characters for the password",1);return false}
+  if(on&&v.email){const email=String(v.email||"").trim().toLowerCase(),passInp=o.querySelector("#acc_pass"),pass=(passInp&&passInp.value.trim())||genPass();
    if(!/^\S+@\S+\.\S+$/.test(email)){toast("Enter their email above — it's what they sign in with",1);o.querySelector("#f_email").focus();return false}
    if(!S.data.users.some(x=>(x.email||"").toLowerCase()===email)){
-    if(pass.length<6){toast("Use at least 6 characters for the password",1);if(passInp)passInp.focus();return false}
+    if(pass.length<8){toast("Use at least 8 characters for the password",1);if(passInp)passInp.focus();return false}
+    accPw=pass;
     const sc=o.querySelector("#acc_scope")?o.querySelector("#acc_scope").value:"all";
     const pgs=[...o.querySelectorAll(".acc_pg:checked")].map(x=>x.value);
     const isAdmin=(v.dept==="Leadership"||v.role==="CEO"||v.role==="Super admin"||v.role==="admin");
-    acc={name:v.name,email,title:v.role||"",role:isAdmin?"admin":"user",active:true,scope:sc,pages:pgs.length?pgs:defPages,passHash:passHash(email,pass)};
+    acc={name:v.name,email,title:v.role||"",role:isAdmin?"admin":"user",active:true,scope:sc,pages:pgs.length?pgs:defPages};if(!S.authMode)acc.passHash=passHash(email,pass);
    }
    v.email=email}
   const tid=await put("team",id,v);if(linked){patch("users",linked.id,{name:v.name,photo:v.photo,teamId:tid}).catch(()=>{})}else{const mu=S.data.users.find(u=>u.email&&v.email&&u.email.toLowerCase()===v.email.toLowerCase());if(mu){patch("users",mu.id,{teamId:tid,photo:v.photo}).catch(()=>{})}}
   if(back){const tt=Object.assign({},byId("team",tid)||{},v);for(const l of missed){const amt=cmAmount(l,tt);if(amt>0&&!byId("commissions",l.id))await S.db.doc("commissions/"+l.id).set({teamId:tid,leadId:l.id,company:l.company||"",dealMrr:num(l.value),amount:amt,rule:cmRuleText(tt),wonAt:l.wonAt||todayISO(),status:"pending",createdAt:new Date().toISOString()})}toast("Commission added for "+missed.length+" past deals")}
-  if(acc){acc.teamId=tid;await put("users",null,acc);toast("Sign-in created for "+v.name+" ("+acc.email+")")}},onDelete:id?()=>del("team",id):null});
+  if(acc){acc.teamId=tid;await put("users",null,acc);
+   if(S.authMode&&accPw){const er=await authSetLogin(acc.email,accPw);if(er){toast(er,1);return false}}
+   toast("Sign-in created for "+v.name+" ("+acc.email+")")}
+  else if(np&&linked){if(S.authMode){const er=await authSetLogin(linked.email,np);if(er){toast(er,1);return false}}else await patch("users",linked.id,{passHash:passHash(linked.email,np)});toast("Password updated for "+v.name)}},onDelete:id?()=>del("team",id):null});
  {const rd=tpf.wire(o);o.querySelector("#f_name").addEventListener("input",rd)}
  if(isSuper()){const fT=o.querySelector("#f_commissionType"),fV=o.querySelector("#f_commissionValue"),fD=o.querySelector("#f_dept");const box=fT.closest(".field"),boxV=fV.closest(".field");
   const sync=()=>{const sales=fD.value==="Sales";box.hidden=!sales;boxV.hidden=!sales||!fT.value;const bk=o.querySelector("#cm_back_wrap");if(bk)bk.hidden=!sales||!fT.value||!(num(fV.value)>0);fV.placeholder=fT.value==="percent"?"e.g. 10 (%)":"e.g. 100 ("+cur()+")"};
@@ -1474,7 +1477,7 @@ VIEWS.settings=()=>{
 
 /* ---- users & access ---- */
 VIEWS.users=()=>{const us=S.data.users.slice().sort((a,b)=>(a.role==="superadmin"?0:1)-(b.role==="superadmin"?0:1)||(a.name||"").localeCompare(b.name||""));
- return {title:"Users & Access",body:`<div class="banner">Each person signs in here with the email and password you set. The pages you tick are the only ones they see. For anyone to add or edit records, also share this artifact with them on claude.ai as <b>Contributor</b> or <b>Editor</b>.</div>
+ return {title:"Users & Access",body:`<div class="banner">Each person signs in here with the email and password you set. The pages you tick are the only ones they see. Passwords must be at least 8 characters. New accounts are created only here, by a super admin.</div>
  <div class="toolbar"><span class="grow"></span><button class="btn pri" data-act="newUser">${svgI("plus")} New user</button></div>
  ${panel(us.length+" accounts",table([{k:"name",l:"Name",f:u=>`<div style="display:flex;gap:10px;align-items:center">${avatarHTML(u.name||u.email,userPhoto(u),"sm")}<div><span class="strong">${esc(u.name||"—")}</span><div class="dim" style="font-size:12px">${esc(u.email)}</div></div></div>`},{k:"role",l:"Role",f:u=>u.role==="superadmin"?pill("Super admin","blue"):pill(u.title||"User","plain")},{k:"pages",l:"Pages",f:u=>u.role==="superadmin"?`<span class="dim">All pages</span>`:`<span style="font-size:12px">${esc((u.pages||[]).map(PAGE_TITLE).join(", ")||"None")}</span>`},{k:"scope",l:"Data",f:u=>u.role==="superadmin"||u.scope!=="own"?"All records":"Own records · "+esc(tName(u.teamId))},{k:"active",l:"Status",f:u=>u.active===false?pill("Off","bad"):pill("Active","ok")},{k:"lastLogin",l:"Last sign-in",f:u=>`<span class="dim">${u.lastLogin?dLabel(u.lastLogin.slice(0,10)):"Never"}</span>`}],us,{act:"editUser"}))}`}};
 function editUser(id){const u=id?byId("users",id):{role:"user",active:true,pages:["sales","calendar","customers"],scope:"all"};
@@ -1483,14 +1486,14 @@ function editUser(id){const u=id?byId("users",id):{role:"user",active:true,pages
  const o=openForm({title:id?"Edit user":"New user",schema:[{k:"name",l:"Full name",req:1},{k:"email",l:"Email (used to sign in)",t:"email",req:1},{k:"password",l:id?"New password (leave empty to keep)":"Password",t:"text",req:!id,ph:id?"••••••••":"At least 6 characters"},{k:"title",l:"Job title",ph:"e.g. Sales Manager"},{k:"role",l:"Role",t:"select",o:[{v:"user",l:"User (selected pages)"},{v:"superadmin",l:"Super admin (everything)"}],blank:null},{k:"teamId",l:"Linked team member",t:"select",o:teamOpts(),hint:"Needed for 'own records only'"},{k:"scope",l:"Data they see",t:"select",o:[{v:"all",l:"All records"},{v:"own",l:"Only their own leads, customers and events"}],blank:null},{k:"active",l:"Account is active (can sign in)",t:"check",full:1}],data:Object.assign({},u,{password:""}),extra,
   onSave:async(v,o)=>{v.email=v.email.toLowerCase();if(!/^\S+@\S+\.\S+$/.test(v.email)){toast("Enter a valid email",1);return false}
    if(S.data.users.some(x=>x.id!==id&&(x.email||"").toLowerCase()===v.email)){toast("Another user already has that email",1);return false}
-   if(v.password&&v.password.length<6){toast("Use at least 6 characters for the password",1);return false}
+   if(v.password&&v.password.length<8){toast("Use at least 8 characters for the password",1);return false}
    if(id&&v.email!==(u.email||"").toLowerCase()&&!v.password){toast("Set a new password when you change the email",1);return false}
    const supers=S.data.users.filter(x=>x.role==="superadmin"&&x.active!==false);
    if(id&&u.role==="superadmin"&&(v.role!=="superadmin"||!v.active)&&supers.length<=1){toast("Keep at least one active super admin",1);return false}
    v.pages=[...o.querySelectorAll(".pg:checked")].map(x=>x.value);
-   if(v.password)v.passHash=passHash(v.email,v.password);delete v.password;
-   await put("users",id,v);if(v.teamId&&byId("team",v.teamId)&&byId("team",v.teamId).name!==v.name)patch("team",v.teamId,{name:v.name}).catch(()=>{});if(id===S.user.id&&v.passHash){S.user.passHash=v.passHash;const raw=JSON.stringify({id,h:v.passHash});if(store(SESS))store(SESS,raw);else sstore(SESS,raw)}},
-  onDelete:id&&id!==S.user.id?()=>del("users",id):null});
+   const pw=v.password;if(pw&&!S.authMode)v.passHash=passHash(v.email,pw);delete v.password;
+   await put("users",id,v);if(S.authMode&&pw){const er=await authSetLogin(v.email,pw);if(er){toast(er,1);return false}}if(v.teamId&&byId("team",v.teamId)&&byId("team",v.teamId).name!==v.name)patch("team",v.teamId,{name:v.name}).catch(()=>{});if(id===S.user.id&&v.passHash){S.user.passHash=v.passHash;const raw=JSON.stringify({id,h:v.passHash});if(store(SESS))store(SESS,raw);else sstore(SESS,raw)}},
+  onDelete:id&&id!==S.user.id?async()=>{await del("users",id);if(S.authMode&&u.email)S.db.client.rpc("admin_delete_login",{p_email:u.email}).then(()=>{},()=>{})}:null});
  o.querySelector("#pgAll").onclick=()=>o.querySelectorAll(".pg").forEach(x=>x.checked=true);o.querySelector("#pgNone").onclick=()=>o.querySelectorAll(".pg").forEach(x=>x.checked=false)}
 // A reusable photo picker block inside a form: returns {html, wire(o), get()}
 function photoField(initial,nameOf,label){let ph=okPhoto(initial)?initial:null;const id="pf"+uid();
@@ -1506,7 +1509,10 @@ function myAccount(){const pf=photoField(userPhoto(S.user),()=>(document.querySe
  const o=openForm({title:"My account",top:pf.html,schema:[{k:"name",l:"Name",req:1,full:1},{k:"np",l:"New password",t:"password",hint:"Leave empty to keep your password"},{k:"cur",l:"Current password",t:"password",hint:"Only needed to change your password"}],data:{name:S.user.name},saveLabel:"Save changes",onSave:async(v)=>{
  const newPhoto=pf.get()||null;
  const p={name:v.name,photo:newPhoto};
- if(v.np){if(passHash(S.user.email,v.cur)!==S.user.passHash){toast("Current password is wrong",1);return false}if(v.np.length<6){toast("Use at least 6 characters",1);return false}p.passHash=passHash(S.user.email,v.np)}
+ if(v.np){if(v.np.length<8){toast("Use at least 8 characters",1);return false}
+  if(S.authMode){const c=await S.db.client.auth.signInWithPassword({email:S.user.email,password:v.cur||""});if(c.error){toast("Current password is wrong",1);return false}
+   const up=await S.db.client.auth.updateUser({password:v.np});if(up.error){toast("Couldn't change the password: "+up.error.message,1);return false}}
+  else{if(passHash(S.user.email,v.cur)!==S.user.passHash){toast("Current password is wrong",1);return false}p.passHash=passHash(S.user.email,v.np)}}
  await patch("users",S.user.id,p);
  S.user.name=v.name;
  S.user.photo=newPhoto;

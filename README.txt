@@ -1,15 +1,14 @@
-XTechnology Group - CEO Dashboard (STANDALONE, no claude.ai needed)
-===================================================================
-Open xtech-hq.html (double-click, or serve the folder with any local server / Antigravity preview).
-Login: infos@xtechnology.group  (your password)
+XTechnology Group - CEO Dashboard
+=================================
+Open the dashboard:  npm run dev  ->  http://localhost:3000/   (index.html)
+Rebuild after editing src/:  node build.js   (writes index.html and xtech-hq.html)
 
-- Data is stored in the browser (IndexedDB), per address. file:// and localhost:PORT are different
-  storages. First run auto-imports your current data (src/seed.json: 114 leads/customers, team, users...).
-- Settings > Backup exports everything to JSON. xtechResetLocalData() in the console resets to the seed.
+Data and sign-in live in Supabase (see SUPABASE.md). Run supabase_secure.sql once, then
+supabase_patch_logins.sql. People are added in Team (email + password) or Users & Access.
 
 src/
-  p1.html            CSS + page shell
-  p2.js p3.js p4.js  app code (state, views, actions)
-  db-adapter.js      the ONLY file that talks to the database -> replace with Supabase later (see SUPABASE.md)
-  seed.json          exported data (first-run import)
-  build_standalone.py  python src/build_standalone.py -> rebuilds ../xtech-hq.html
+  p1.html          CSS + page shell
+  p2.js p3.js p4.js p5.js   app code (state, views, actions, Supabase adapter, business suite)
+  logo_t.b64 mark_t.b64     logos
+Private data (src/seed.json, supabase_setup.sql) is git-ignored and never embedded in the build
+unless you run:  XTECH_EMBED_SEED=1 node build.js   (do NOT commit that output).

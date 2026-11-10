@@ -57,7 +57,7 @@ const ACT={
  ovPickMonth:(el)=>{S.ui.ovMonth=el.dataset.id;render()},
  ovToggleTx:(el,e)=>{if(e)e.stopPropagation();const id=el.dataset.id;S.ui.ovSelTx=S.ui.ovSelTx||new Set();S.ui.ovSelTx.has(id)?S.ui.ovSelTx.delete(id):S.ui.ovSelTx.add(id);render()},
  ovSelectAllTx:(el,e)=>{if(e)e.stopPropagation();S.ui.ovSelTx=S.ui.ovSelTx||new Set();const all=D.customers("all").slice(0,7);const allSel=all.length&&all.every(c=>S.ui.ovSelTx.has(c.id));all.forEach(c=>allSel?S.ui.ovSelTx.delete(c.id):S.ui.ovSelTx.add(c.id));render()},
- ovExportTx:()=>{const custs=D.customers("all").slice(0,25);const rows=custs.map(c=>{const p=byId("products",c.productId);const cid=c.owner||(c.leadId&&(byId("leads",c.leadId)||{}).owner)||"9mg7s3zsh5huvtquhtum";let cname=tName(cid);if(!cname||cname==="Unassigned") cname="Sara";if(cname.toLowerCase()==="sara") cname="Sara";else if(cname.includes("Bader")) cname="Bader";return {orderId:"TK-"+((c.id||"").replace(/\D/g,"").slice(-5)||"98421"),product:p?p.name:"XTech Cloud POS",date:dLabel(c.start||todayISO()),customer:c.contact||c.business,closedBy:cname,price:money(c.price||79),status:c.status==="Active"?"Completed":(c.payment==="Overdue"?"Cancelled":"Pending")}});saveFile("recent-transactions.csv",csv(rows,[["orderId","Order ID"],["product","Product Name"],["date","Date"],["customer","Customer"],["closedBy","Closed By"],["price","Price"],["status","Status"]]))},
+ ovExportTx:()=>{const custs=D.customers("all").slice(0,25);const rows=custs.map(c=>{const p=byId("products",c.productId);const cid=c.owner||(c.leadId&&(byId("leads",c.leadId)||{}).owner)||"";const cname=cid?tName(cid):"Unassigned";return {orderId:"TK-"+String(c.id||"").replace(/[^a-z0-9]/gi,"").slice(-5).toUpperCase(),product:p?p.name:"",date:dLabel(c.start||todayISO()),customer:c.contact||c.business,closedBy:cname,price:money(c.price||0),status:c.status==="Active"?"Completed":(c.payment==="Overdue"?"Cancelled":"Pending")}});saveFile("recent-transactions.csv",csv(rows,[["orderId","Order ID"],["product","Product Name"],["date","Date"],["customer","Customer"],["closedBy","Closed By"],["price","Price"],["status","Status"]]))},
  newProduct:()=>editProduct(null),productLogo:(el)=>{const id=el.dataset.id;pickImage(f=>setProductLogo(id,f))},editProduct:(el)=>editProduct(el.dataset.id),
  openProduct:(el)=>{if(!canSee("products"))return;S.page="products";S.productId=el.dataset.id;closeOverlay();render();scrollTo(0,0)},backProducts:()=>{S.productId=null;render()},
  productReport:(el)=>{S.ui.repProduct=el.dataset.id;S.page="reports";S.productId=null;render();scrollTo(0,0)},
@@ -136,7 +136,7 @@ function createSupabaseDb(url,key){
     throw new Error("Supabase client SDK not loaded");
   }
   const client=window.supabase.createClient(url,key,{
-    auth:{persistSession:false},
+    auth:{persistSession:true,autoRefreshToken:true,storageKey:"xtg_sb_auth"},
     realtime:{params:{eventsPerSecond:10}}
   });
 
@@ -144,7 +144,8 @@ function createSupabaseDb(url,key){
   const cache={};
   window.xtechSupabaseClient=client;
 
-  try{
+  let _rt=false;
+  function startRealtime(){if(_rt)return;_rt=true;try{
     client.channel("public:docs")
       .on("postgres_changes",{event:"*",schema:"public",table:"docs"},payload=>{
         const {eventType,new:newDoc,old:oldDoc}=payload;
@@ -162,7 +163,7 @@ function createSupabaseDb(url,key){
         }
       })
       .subscribe();
-  }catch(e){console.warn("Realtime subscription warning",e)}
+  }catch(e){console.warn("Realtime subscription warning",e)}}
 
   const notify=(c)=>{
     if(subs[c]){
@@ -178,14 +179,14 @@ function createSupabaseDb(url,key){
       if(error)throw error;
       cache[c]={};
       (data||[]).forEach(r=>{if(r&&r.id)cache[c][r.id]=r.data});
-      if(c==="users"){
+      if(c==="users"&&!S.authMode){
         const usersList=Object.values(cache.users||{});
-        const hasAdmin=usersList.some(u=>u&&u.email==="infos@xtechnology.group");
+        const hasAdmin=usersList.some(u=>u&&u.role==="superadmin");
         if(!hasAdmin){
-          const sa={id:"usr_superadmin",name:"Bader",email:"infos@xtechnology.group",passHash:passHash("infos@xtechnology.group","xtech1m$"),role:"superadmin",title:"Co-Founder",active:true,pages:PAGES.map(p=>p.id),scope:"all",createdAt:todayISO()};
+          const sa={id:"usr_superadmin",name:"Bader",email:"infos@xtechnology.group",passHash:passHash("infos@xtechnology.group",genPass()),role:"superadmin",title:"Co-Founder",active:true,pages:PAGES.map(p=>p.id),scope:"all",createdAt:todayISO()};
           cache.users=cache.users||{};
           cache.users[sa.id]=sa;
-          client.from("docs").upsert({col:"users",id:sa.id,data:sa,updated_at:new Date().toISOString()},{onConflict:"col,id"}).catch(()=>{});
+          Promise.resolve(client.from("docs").upsert({col:"users",id:sa.id,data:sa,updated_at:new Date().toISOString()},{onConflict:"col,id"})).catch(()=>{});
         }
       }
       notify(c);
@@ -197,7 +198,7 @@ function createSupabaseDb(url,key){
   }
 
   const db={
-    client,
+    client,startRealtime,
     collection(c){
       return {
         onSnapshot(cb,errCb){
@@ -226,26 +227,30 @@ function createSupabaseDb(url,key){
         },
         set:async(data)=>{
           cache[c]=cache[c]||{};
+          const prev=cache[c][id];
           cache[c][id]=Object.assign({},data);
           notify(c);
           const {error}=await client.from("docs").upsert({col:c,id,data,updated_at:new Date().toISOString()},{onConflict:"col,id"});
-          if(error)throw error;
+          if(error){if(prev===undefined)delete cache[c][id];else cache[c][id]=prev;notify(c);throw error}
           return id;
         },
         update:async(data)=>{
           const cur=(cache[c]&&cache[c][id])||{};
-          const merged=Object.assign({},cur,data);
+          const merged=Object.assign({},cur);
+          for(const k in data){const v=data[k];if(v&&typeof v==="object"&&v.__delete__)delete merged[k];else merged[k]=v}
           cache[c]=cache[c]||{};
+          const prev=cache[c][id];
           cache[c][id]=merged;
           notify(c);
           const {error}=await client.from("docs").upsert({col:c,id,data:merged,updated_at:new Date().toISOString()},{onConflict:"col,id"});
-          if(error)throw error;
+          if(error){if(prev===undefined)delete cache[c][id];else cache[c][id]=prev;notify(c);throw error}
         },
         delete:async()=>{
+          const prev=cache[c]&&cache[c][id];
           if(cache[c])delete cache[c][id];
           notify(c);
           const {error}=await client.from("docs").delete().match({col:c,id});
-          if(error)throw error;
+          if(error){if(prev!==undefined){cache[c][id]=prev;notify(c)}throw error}
         }
       };
     }
@@ -321,12 +326,13 @@ function createLocalDb(){
    }
   }
  }
- // Ensure superadmin account is always active with requested credentials
+ // Make sure a super admin exists. Existing password is NEVER overwritten.
  const currentUsers=getCol("users");
- const saIdx=currentUsers.findIndex(u=>u&&(u.email==="infos@xtechnology.group"||u.role==="superadmin"));
- const sa={id:saIdx>=0?currentUsers[saIdx].id:"usr_superadmin",name:"Co-Fonder | Bader Bensalah",email:"infos@xtechnology.group",passHash:passHash("infos@xtechnology.group","xtech1m$"),role:"superadmin",title:"Co-Founder",teamId:"dv3yk1dw6tk95if7zs42",active:true,pages:PAGES.map(p=>p.id),scope:"all",createdAt:todayISO()};
- if(saIdx>=0){currentUsers[saIdx]=Object.assign({},sa,currentUsers[saIdx],{teamId:"dv3yk1dw6tk95if7zs42",passHash:sa.passHash,active:true})}else{currentUsers.unshift(sa)}
+ const saIdx=currentUsers.findIndex(u=>u&&u.role==="superadmin");
+ if(saIdx>=0){currentUsers[saIdx].active=true;if(!currentUsers[saIdx].teamId)currentUsers[saIdx].teamId="dv3yk1dw6tk95if7zs42"}
+ else currentUsers.unshift({id:"usr_superadmin",name:"Co-Fonder | Bader Bensalah",email:"infos@xtechnology.group",passHash:passHash("infos@xtechnology.group",(window.__xtLocalPw=genPass())),role:"superadmin",title:"Co-Founder",teamId:"dv3yk1dw6tk95if7zs42",active:true,pages:PAGES.map(p=>p.id),scope:"all",createdAt:todayISO()});
  saveCol("users",currentUsers);
+ if(window.__xtLocalPw)console.warn("[XTech] Offline mode: temporary super admin password for infos@xtechnology.group is "+window.__xtLocalPw);
  const currentTeam=getCol("team");
  const baderTeam=currentTeam.find(t=>t.id==="dv3yk1dw6tk95if7zs42"||(t.email&&t.email==="infos@xtechnology.group"));
  if(baderTeam){
@@ -336,34 +342,12 @@ function createLocalDb(){
    currentUsers[saIdx>=0?saIdx:0].photo=photo;
   }
  }
- // Synchronize any team member with an email into users so they can ALWAYS log in!
+ // Link existing accounts to team members by email (accounts are created by the super admin only).
  currentTeam.forEach(t=>{
   if(t&&t.email){
    const tEmail=String(t.email).trim().toLowerCase();
-   let uIdx=currentUsers.findIndex(u=>u&&u.email&&u.email.toLowerCase()===tEmail);
-   const isAdmin=(t.dept==="Leadership"||t.role==="CEO"||t.role==="Super admin"||t.role==="admin");
-   if(uIdx<0){
-    const newU={
-     id:"usr_"+(t.id||Math.random().toString(36).slice(2)),
-     name:t.name||"Team Member",
-     email:tEmail,
-     title:t.role||"Team Member",
-     role:isAdmin?"admin":"user",
-     teamId:t.id,
-     photo:t.photo||null,
-     active:true,
-     scope:"all",
-     pages:PAGES.filter(p=>!p.superOnly&&!p.auto).map(p=>p.id),
-     passHash:passHash(tEmail,tEmail),
-     createdAt:todayISO()
-    };
-    currentUsers.push(newU);
-   }else{
-    currentUsers[uIdx].teamId=currentUsers[uIdx].teamId||t.id;
-    if(t.photo&&!currentUsers[uIdx].photo)currentUsers[uIdx].photo=t.photo;
-    if(currentUsers[uIdx].photo&&!t.photo)t.photo=currentUsers[uIdx].photo;
-    if(isAdmin&&currentUsers[uIdx].role!=="superadmin")currentUsers[uIdx].role="admin";
-   }
+   const u=currentUsers.find(u=>u&&u.email&&u.email.toLowerCase()===tEmail);
+   if(u){u.teamId=u.teamId||t.id;if(t.photo&&!u.photo)u.photo=t.photo;if(u.photo&&!t.photo)t.photo=u.photo}
   }
  });
  saveCol("team",currentTeam);
@@ -412,6 +396,16 @@ async function bootDb(){
   if(window.supabase){
     try{
       const sb=createSupabaseDb(url,key);
+      /* Secure mode: the master SQL was run, so the table is closed and people sign in with Supabase Auth. */
+      const rq=await sb.client.rpc("xtech_auth_required");
+      if(!rq.error&&rq.data===true){
+        S.authMode=true;S.db=sb;window.xtechDbMode="supabase";
+        let {data:sd}=await sb.client.auth.getSession();let ses=sd&&sd.session;
+        if(ses&&store("xtg_rem")!=="1"&&sstore("xtg_tab")!=="1"){await sb.client.auth.signOut();ses=null}
+        S.authed=!!ses;S.authEmail=ses?ses.user.email:null;
+        sb.client.auth.onAuthStateChange(ev=>{if(ev==="SIGNED_OUT"&&S.authed){S.authed=false;location.reload()}});
+        return;
+      }
       const {error}=await sb.client.from("docs").select("id").limit(1);
       if(!error){
         S.db=sb;
@@ -432,6 +426,20 @@ async function bootDb(){
 (async function boot(tries){
  if(!S.dl)S.dl=localDl;
  await bootDb();
- subscribe();
- render();
+ if(S.authMode&&!S.authed){render();return}
+ startData();
 })(0);
+function startData(){if(S._started)return;S._started=true;if(S.db&&S.db.startRealtime)S.db.startRealtime();subscribe();render()}
+function genPass(){const a="abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";return Array.from(crypto.getRandomValues(new Uint8Array(10)),b=>a[b%a.length]).join("")+"7"}
+/* Supabase Auth helpers (secure mode only) */
+async function authSetLogin(email,pw){
+ const {data,error}=await S.db.client.rpc("admin_set_password",{p_email:email,p_password:pw});
+ if(error)return "Couldn't set the password: "+error.message;
+ if(data===true)return null;
+ const c2=window.supabase.createClient(SB_URL,SB_ANON_KEY,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+ const {data:sd,error:e2}=await c2.auth.signUp({email,password:pw});
+ if(e2)return "Couldn't create the login: "+e2.message;
+ if(sd&&sd.user&&!sd.session){ /* email confirmation is ON: confirm it through the admin function (needs supabase_patch_logins.sql) */
+  const r=await S.db.client.rpc("admin_set_password",{p_email:email,p_password:pw});
+  if(r.error)return "Login created but not confirmed. Turn OFF 'Confirm email' in Supabase (Authentication > Providers > Email) or run supabase_patch_logins.sql.";}
+ return null}

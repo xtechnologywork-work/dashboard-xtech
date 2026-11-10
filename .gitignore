@@ -6,3 +6,5 @@ node_modules/
 Thumbs.db
 .vscode/
 .idea/
+src/seed.json
+supabase_setup.sql
